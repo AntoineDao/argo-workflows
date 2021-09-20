@@ -3,6 +3,8 @@ package config
 import (
 	"testing"
 
+	apiv1 "k8s.io/api/core/v1"
+
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -39,4 +41,26 @@ func TestContainerRuntimeExecutor(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "bar", executor)
 	})
+}
+
+func TestEventSinkConfig(t *testing.T) {
+	sinkFoo := SinkConfig{Name: "foo"}
+	sinkBar := SinkConfig{Name: "bar"}
+	sinks := make([]SinkConfig, 2)
+	sinks = append(sinks, sinkFoo)
+	sinks = append(sinks, sinkBar)
+
+	eventSinksConfig := EventSinksConfig{
+		Sinks: sinks,
+	}
+
+	assert.Equal(t, sinkFoo, eventSinksConfig.GetSinkConfig("foo"))
+}
+
+func TestRuleMatchEvent(t *testing.T) {
+	rule := Rule{
+		Kind: "Workflow",
+	}
+	annotations := map[string]string{}
+	assert.True(t, rule.MatchesEvent(apiv1.EventTypeNormal, "WorkflowKind", "WorkflowSucceeded", "Workflow succeeded!", annotations))
 }

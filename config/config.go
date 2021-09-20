@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"regexp"
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -119,6 +120,9 @@ type Config struct {
 	// The command/args for each image, needed when the command is not specified and the emissary executor is used.
 	// https://argoproj.github.io/argo-workflows/workflow-executors/#emissary-emissary
 	Images map[string]Image `json:"images,omitempty"`
+
+	// The event sinks and rules to send controller events to them
+	EventSinks EventSinksConfig `json:"eventSinks,omitempty"`
 }
 
 func (c Config) GetContainerRuntimeExecutor(labels labels.Labels) (string, error) {
@@ -265,4 +269,99 @@ func (req *WorkflowRestrictions) MustNotChangeSpec() bool {
 		return false
 	}
 	return req.TemplateReferencing == TemplateReferencingSecure
+}
+
+type EventSinksConfig struct {
+	Route *EventRoute  `json:"route,omitempty"`
+	Sinks []SinkConfig `json:"sinks,omitempty"`
+}
+
+func (s *EventSinksConfig) GetSinkConfig(name string) SinkConfig {
+	for _, sink := range s.Sinks {
+		if sink.Name == name {
+			return sink
+		}
+	}
+	return SinkConfig{}
+}
+
+type EventRoute struct {
+	Drop   []Rule       `json:"drop,omitempty"`
+	Match  []Rule       `json:"match,omitempty"`
+	Routes []EventRoute `json:"routes,omitempty"`
+}
+
+type Rule struct {
+	Sink string `json:"sink"`
+	// Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+	Message     string            `json:"message,omitempty"`
+	Kind        string            `json:"kind,omitempty"`
+	Namespace   string            `json:"namespace,omitempty"`
+	Reason      string            `json:"reason,omitempty"`
+	Type        string            `json:"type,omitempty"`
+}
+
+// matchString is a method to clean the code. Error handling is omitted here because these
+// rules are validated before use. According to regexp.MatchString, the only way it fails its
+// that the pattern does not compile.
+func matchString(pattern, s string) bool {
+	matched, _ := regexp.MatchString(pattern, s)
+	return matched
+}
+
+// MatchesEvent compares the rule to an event and returns a boolean value to indicate
+// whether the event is compatible with the rule. All fields are compared as regular expressions
+// so the user must keep that in mind while writing rules.
+func (r *Rule) MatchesEvent(eventtype, kind, reason, message string, annotations map[string]string) bool {
+	// These rules are just basic comparison rules, if one of them fails, it means the event does not match the rule
+	rules := [][2]string{
+		{r.Type, eventtype},
+		{r.Kind, kind},
+		{r.Reason, reason},
+		{r.Message, message},
+	}
+
+	for _, v := range rules {
+		rule := v[0]
+		value := v[1]
+		if rule != "" {
+			matches := matchString(rule, value)
+			if !matches {
+				return false
+			}
+		}
+	}
+
+	// Annotations are also mutually exclusive, they all need to be present
+	if r.Annotations != nil && len(r.Annotations) > 0 {
+		for k, v := range r.Annotations {
+			if val, ok := annotations[k]; !ok {
+				return false
+			} else {
+				matches := matchString(v, val)
+				if !matches {
+					return false
+				}
+			}
+		}
+	}
+
+	// If it failed every step, it must match because our matchers are limiting
+	return true
+}
+
+func (r *Rule) MatchNamespace(namespace string) bool {
+	return r.Namespace == namespace
+}
+
+type SinkConfig struct {
+	Name    string         `json:"name"`
+	Webhook *WebhookConfig `json:"webhook"`
+}
+
+type WebhookConfig struct {
+	Endpoint string                 `json:"endpoint"`
+	Layout   map[string]interface{} `json:"layout,omitempty"`
+	Headers  map[string]string      `json:"headers,omitempty"`
 }
